@@ -422,20 +422,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     <main>
         <div class="container">
-            <?php
-            // Load site-wide announcement (from admin.php saved file)
-            $announcement_file = __DIR__ . DIRECTORY_SEPARATOR . 'announcement.json';
-            if (file_exists($announcement_file)) {
-                $raw = file_get_contents($announcement_file);
-                $data = json_decode($raw, true);
-                if (is_array($data) && !empty($data['active']) && !empty($data['message'])) {
-                    echo '<div class="alert" style="background:#fff3cd;color:#856404;border-left:5px solid #ffc107;">'
-                        . '<i class="fas fa-bullhorn" style="margin-right:8px;"></i>'
-                        . htmlspecialchars($data['message'])
-                        . '</div>';
-                }
-            }
-            ?>
+            
             <?php if (!empty($errors)): ?>
                 <div class="alert error">
                     <ul>

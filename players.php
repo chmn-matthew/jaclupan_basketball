@@ -22,18 +22,16 @@ if (!$team) {
 
 // Check if players are already registered (with proper validation)
 $players_registered = isset($team['players_registered']) ? (bool)$team['players_registered'] : false;
+$review_status = isset($team['status']) ? $team['status'] : 'pending';
+$editing_locked = ($review_status === 'approved');
 
-if ($players_registered) {
-    $_SESSION['message'] = "Your players have already been registered.";
-    header("Location: team_dashboard.php");
-    exit();
-}
+// Editing is controlled by admin approval status, not by players_registered
 
 // Handle form submission for adding a new player
 $errors = [];
 $success = false;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_player'])) {
+if (!$editing_locked && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_player'])) {
     $name = $_POST['name'] ?? '';
     $birthdate = $_POST['birthdate'] ?? '';
     $address = $_POST['address'] ?? '';
@@ -151,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_player'])) {
 }
 
 // Handle form submission for editing a player
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_player'])) {
+if (!$editing_locked && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_player'])) {
     $player_id = $_POST['player_id'] ?? '';
     $name = $_POST['edit_name'] ?? '';
     $birthdate = $_POST['edit_birthdate'] ?? '';
@@ -259,7 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_player'])) {
 }
 
 // Handle player deletion
-if (isset($_GET['delete'])) {
+if (!$editing_locked && isset($_GET['delete'])) {
     $player_id = $_GET['delete'];
     
     // Verify player belongs to team
@@ -293,19 +291,7 @@ $stmt = $pdo->prepare("SELECT * FROM players WHERE team_id = ? ORDER BY name");
 $stmt->execute([$team_id]);
 $players = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Handle final submission
-if (isset($_POST['final_submit']) && count($players) >= 15) {
-    try {
-        $stmt = $pdo->prepare("UPDATE teams SET players_registered = 1 WHERE id = ?");
-        $stmt->execute([$team_id]);
-        
-        $_SESSION['message'] = "Team registration completed successfully!";
-        header("Location: team_dashboard.php");
-        exit();
-    } catch(PDOException $e) {
-        $errors[] = "Database error: " . $e->getMessage();
-    }
-}
+// Remove team-driven final submission; admin approval controls the lock
 ?>
 
 <!DOCTYPE html>
@@ -737,7 +723,7 @@ if (isset($_POST['final_submit']) && count($players) >= 15) {
         <div class="content">
             <h2 class="section-title">Add New Player</h2>
             
-            <form method="POST" action="" enctype="multipart/form-data" class="form-grid">
+            <form method="POST" action="" enctype="multipart/form-data" class="form-grid" <?php echo $editing_locked ? 'style="pointer-events:none;opacity:0.6;"' : ''; ?>>
                 <div class="form-section">
                     <div class="form-group">
                         <label for="name">Player Full Name *</label>
@@ -776,7 +762,7 @@ if (isset($_POST['final_submit']) && count($players) >= 15) {
                         <div class="file-hint">Accepted formats: JPG, JPEG, PNG, GIF, PDF</div>
                     </div>
                     
-                    <button type="submit" name="add_player" class="btn">
+                    <button type="submit" name="add_player" class="btn" <?php echo $editing_locked ? 'disabled' : ''; ?>>
                         <i class="fas fa-plus"></i> Add Player
                     </button>
                 </div>
@@ -813,10 +799,10 @@ if (isset($_POST['final_submit']) && count($players) >= 15) {
                             </div>
                             
                             <div class="player-actions">
-                                <button type="button" class="btn btn-secondary" onclick="editPlayer(<?php echo $player['id']; ?>)">
+                                <button type="button" class="btn btn-secondary" onclick="editPlayer(<?php echo $player['id']; ?>)" <?php echo $editing_locked ? 'disabled' : ''; ?>>
                                     <i class="fas fa-edit"></i> Edit
                                 </button>
-                                <a href="players.php?delete=<?php echo $player['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete this player?');">
+                                <a href="<?php echo $editing_locked ? '#' : 'players.php?delete=' . (int)$player['id']; ?>" class="btn btn-danger" onclick="<?php echo $editing_locked ? 'return false;' : "return confirm('Are you sure you want to delete this player?');" ?>">
                                     <i class="fas fa-trash"></i> Delete
                                 </a>
                             </div>
@@ -824,20 +810,7 @@ if (isset($_POST['final_submit']) && count($players) >= 15) {
                     <?php endforeach; ?>
                 </div>
                 
-                <?php if (count($players) >= 15): ?>
-                    <div class="final-submit">
-                        <form method="POST" action="">
-                            <button type="submit" name="final_submit" class="btn btn-success">
-                                <i class="fas fa-check-circle"></i> Complete Registration
-                            </button>
-                            <p class="file-hint" style="margin-top: 10px;">Once you complete registration, you won't be able to add more players.</p>
-                        </form>
-                    </div>
-                <?php else: ?>
-                    <div class="final-submit">
-                        <p class="file-hint">You need at least 15 players to complete registration.</p>
-                    </div>
-                <?php endif; ?>
+                <!-- Final submission removed; admin approval controls lock -->
             <?php else: ?>
                 <div class="empty-state">
                     <i class="fas fa-users"></i>

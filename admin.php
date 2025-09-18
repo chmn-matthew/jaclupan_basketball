@@ -39,12 +39,14 @@ if ($is_logged_in) {
     $announcement_file = __DIR__ . DIRECTORY_SEPARATOR . 'announcement.json';
     $announcement_message = '';
     $announcement_active = false;
+    $announcement_attachment = '';
     if (file_exists($announcement_file)) {
         $raw = file_get_contents($announcement_file);
         $data = json_decode($raw, true);
         if (is_array($data)) {
             $announcement_message = isset($data['message']) ? (string)$data['message'] : '';
             $announcement_active = !empty($data['active']);
+            $announcement_attachment = isset($data['file_path']) ? (string)$data['file_path'] : '';
         }
     }
 
@@ -52,23 +54,84 @@ if ($is_logged_in) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_announcement'])) {
         $new_message = isset($_POST['announcement_message']) ? trim($_POST['announcement_message']) : '';
         $new_active = isset($_POST['announcement_active']) ? true : false;
-        $payload = [
-            'message' => $new_message,
-            'active' => $new_active,
-            'updated_at' => date('c')
-        ];
-        if (file_put_contents($announcement_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) !== false) {
-            $success = 'Announcement updated successfully';
-            $announcement_message = $new_message;
-            $announcement_active = $new_active;
-        } else {
-            $error = 'Failed to save announcement. Please check file permissions.';
+
+        // Preserve existing attachment unless a new one is uploaded
+        $new_file_path = $announcement_attachment;
+
+        if (isset($_FILES['announcement_file']) && $_FILES['announcement_file']['error'] === UPLOAD_ERR_OK) {
+            $ext = strtolower(pathinfo($_FILES['announcement_file']['name'], PATHINFO_EXTENSION));
+            $allowed_ext = ['pdf', 'jpg', 'jpeg', 'png', 'gif'];
+            if (in_array($ext, $allowed_ext, true)) {
+                $dir = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'announcements';
+                if (!is_dir($dir)) {
+                    @mkdir($dir, 0777, true);
+                }
+                $basename = uniqid('announcement_', true) . '.' . $ext;
+                $abs_path = $dir . DIRECTORY_SEPARATOR . $basename;
+                $rel_path = 'uploads/announcements/' . $basename;
+                if (move_uploaded_file($_FILES['announcement_file']['tmp_name'], $abs_path)) {
+                    $new_file_path = $rel_path;
+                } else {
+                    $error = 'Failed to upload announcement file.';
+                }
+            } else {
+                $error = 'Invalid file type. Allowed: PDF, JPG, JPEG, PNG, GIF';
+            }
+        }
+
+        // Only save if no upload error occurred
+        if (!isset($error)) {
+            $payload = [
+                'message' => $new_message,
+                'active' => $new_active,
+                'file_path' => $new_file_path,
+                'updated_at' => date('c')
+            ];
+            if (file_put_contents($announcement_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) !== false) {
+                $success = 'Announcement updated successfully';
+                $announcement_message = $new_message;
+                $announcement_active = $new_active;
+                $announcement_attachment = $new_file_path;
+            } else {
+                $error = 'Failed to save announcement. Please check file permissions.';
+            }
+        }
+    }
+
+    // Handle team review status update
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
+        $team_id = isset($_POST['team_id']) ? (int)$_POST['team_id'] : 0;
+        $status = isset($_POST['status']) ? trim($_POST['status']) : 'pending';
+        $status_notes = isset($_POST['status_notes']) ? trim($_POST['status_notes']) : null;
+        $allowed = ['pending', 'approved', 'lacking', 'rejected'];
+        if (!in_array($status, $allowed, true)) { $status = 'pending'; }
+        if ($team_id > 0) {
+            try {
+                $stmt = $pdo->prepare("UPDATE teams SET status = ?, status_notes = ? WHERE id = ?");
+                $stmt->execute([$status, $status_notes, $team_id]);
+                $success = 'Team review status updated.';
+            } catch (PDOException $e) {
+                $error = 'Failed to update status: ' . $e->getMessage();
+            }
         }
     }
 
     try {
-        $stmt = $pdo->query("SELECT * FROM teams ORDER BY registration_date DESC");
+        $stmt = $pdo->query("SELECT * FROM teams ORDER BY division, registration_date DESC");
         $teams = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // Compute summary counts
+        $counts = [
+            'total' => count($teams),
+            'approved' => 0,
+            'pending' => 0,
+            'lacking' => 0,
+            'rejected' => 0
+        ];
+        foreach ($teams as $t) {
+            $st = isset($t['status']) ? $t['status'] : 'pending';
+            if (isset($counts[$st])) { $counts[$st]++; }
+            else { $counts['pending']++; }
+        }
     } catch(PDOException $e) {
         $error = "Database error: " . $e->getMessage();
     }
@@ -136,6 +199,29 @@ if ($is_logged_in && isset($_GET['view_players'])) {
             margin: 20px 0;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        .stat-chips { display:flex; gap:8px; flex-wrap:wrap; }
+        .chip {
+            display:inline-flex; align-items:center; gap:6px;
+            padding:8px 12px; border-radius:20px; font-size:13px; font-weight:600;
+            background:#f1f3f5; color:#333; border:1px solid #e5e7eb;
+        }
+        .chip i { opacity: .8; }
+        .chip-approved { background:#e6f4ea; color:#1e7e34; border-color:#c7e8d0; }
+        .chip-pending { background:#fff3cd; color:#856404; border-color:#ffe8a1; }
+        .chip-lacking { background:#ffe9e0; color:#a14500; border-color:#ffd1bf; }
+        .chip-rejected { background:#fdecea; color:#c92a2a; border-color:#fac5c0; }
+        .search-input {
+            flex:1; min-width:220px;
+            padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px;
         }
         
         .login-form {
@@ -263,6 +349,7 @@ if ($is_logged_in && isset($_GET['view_players'])) {
             text-align: left;
             border-bottom: 1px solid #eaeaea;
         }
+        thead th { position: sticky; top: 0; background:#f8f9fa; z-index:1; }
         
         th {
             background-color: #f8f9fa;
@@ -306,6 +393,14 @@ if ($is_logged_in && isset($_GET['view_players'])) {
             padding-bottom: 10px;
             border-bottom: 2px solid #f0f0f0;
         }
+        details.division {
+            background:#fafbff; border:1px solid #eef1ff; border-radius:8px; margin:14px 0; padding:10px 12px;
+        }
+        details.division summary {
+            list-style:none; cursor:pointer; font-weight:700; color:#283593;
+        }
+        details.division summary::-webkit-details-marker { display:none; }
+        .legend { display:flex; gap:8px; flex-wrap:wrap; margin-left:auto; }
         
         .actions {
             display: flex;
@@ -472,7 +567,7 @@ if ($is_logged_in && isset($_GET['view_players'])) {
             <div class="content">
                 <?php if ($is_logged_in && !isset($_GET['view_players'])): ?>
                     <h2 class="section-title">Site Announcement</h2>
-                    <form method="POST" action="" style="margin-bottom:20px;">
+                    <form method="POST" action="" enctype="multipart/form-data" style="margin-bottom:20px;">
                         <div class="form-group">
                             <label for="announcement_message">Announcement Message</label>
                             <textarea id="announcement_message" name="announcement_message" rows="4" style="width:100%; padding:12px 15px; border:1px solid #ddd; border-radius:6px; font-size:16px;" placeholder="Enter announcement to display site-wide..."><?php echo htmlspecialchars($announcement_message); ?></textarea>
@@ -480,6 +575,15 @@ if ($is_logged_in && isset($_GET['view_players'])) {
                         <div class="form-group" style="display:flex; align-items:center; gap:10px;">
                             <input type="checkbox" id="announcement_active" name="announcement_active" <?php echo $announcement_active ? 'checked' : ''; ?>>
                             <label for="announcement_active" style="margin:0;">Active (show announcement to users)</label>
+                        </div>
+                        <div class="form-group">
+                            <label for="announcement_file">Attachment (PDF/Image, optional)</label>
+                            <input type="file" id="announcement_file" name="announcement_file" accept=".pdf,.jpg,.jpeg,.png,.gif" style="width:100%; padding:10px; border:2px dashed #ddd; border-radius:6px; background:#fafafa;">
+                            <?php if (!empty($announcement_attachment)): ?>
+                                <div style="margin-top:8px;">
+                                    Current file: <a href="<?php echo htmlspecialchars($announcement_attachment); ?>" target="_blank">View attachment</a>
+                                </div>
+                            <?php endif; ?>
                         </div>
                         <button type="submit" name="save_announcement" class="btn">
                             <i class="fas fa-save"></i> Save Announcement
@@ -516,7 +620,12 @@ if ($is_logged_in && isset($_GET['view_players'])) {
                                     <div class="player-actions">
                                         <?php if (!empty($player['document_path'])): ?>
                                             <a href="<?php echo htmlspecialchars($player['document_path']); ?>" target="_blank" class="btn btn-success">
-                                                <i class="fas fa-file"></i> View ID
+                                                <i class="fas fa-id-card"></i> View ID
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php if (!empty($player['birth_certificate_path'])): ?>
+                                            <a href="<?php echo htmlspecialchars($player['birth_certificate_path']); ?>" target="_blank" class="btn btn-secondary">
+                                                <i class="fas fa-file"></i> Birth Certificate
                                             </a>
                                         <?php endif; ?>
                                     </div>
@@ -531,58 +640,122 @@ if ($is_logged_in && isset($_GET['view_players'])) {
                     <?php endif; ?>
                 <?php else: ?>
                     <h2 class="section-title">Registered Teams (<?php echo count($teams); ?>)</h2>
-                    
+                    <div class="toolbar">
+                        <input type="text" id="teamSearch" class="search-input" placeholder="Search team, coach, contact, notes...">
+                        <div class="stat-chips">
+                            <span class="chip"><i class="fas fa-users"></i> Total: <?php echo (int)$counts['total']; ?></span>
+                            <span class="chip chip-approved"><i class="fas fa-check-circle"></i> Approved: <?php echo (int)$counts['approved']; ?></span>
+                            <span class="chip chip-pending"><i class="fas fa-clock"></i> Pending: <?php echo (int)$counts['pending']; ?></span>
+                            <span class="chip chip-lacking"><i class="fas fa-exclamation-triangle"></i> Lacking: <?php echo (int)$counts['lacking']; ?></span>
+                            <span class="chip chip-rejected"><i class="fas fa-times-circle"></i> Not Approved: <?php echo (int)$counts['rejected']; ?></span>
+                        </div>
+                    </div>
                     <?php if (count($teams) > 0): ?>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Team</th>
-                                    <th>Division</th>
-                                    <th>Coach</th>
-                                    <th>Contact</th>
-                                    <th>Status</th>
-                                    <th>Registered</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($teams as $team): ?>
+                        <?php 
+                            $teams_by_division = [];
+                            foreach ($teams as $t) {
+                                $div = $t['division'] ?? 'UNSPECIFIED';
+                                if (!isset($teams_by_division[$div])) { $teams_by_division[$div] = []; }
+                                $teams_by_division[$div][] = $t;
+                            }
+                            // Define desired order
+                            $division_order = ['UNDER_12','UNDER_16','UNDER_20','UNDER_30','31_39','40_UP','UNSPECIFIED'];
+                            // Helper to pretty print
+                            $pretty = function($key) {
+                                $map = [
+                                    'UNDER_12' => 'UNDER 12 DIVISION',
+                                    'UNDER_16' => 'UNDER 16 DIVISION',
+                                    'UNDER_20' => 'UNDER 20 DIVISION',
+                                    'UNDER_30' => 'UNDER 30 DIVISION',
+                                    '31_39' => '31-39 DIVISION',
+                                    '40_UP' => '40UP DIVISION',
+                                    'UNSPECIFIED' => 'UNSPECIFIED'
+                                ];
+                                return isset($map[$key]) ? $map[$key] : $key;
+                            };
+                            // Build ordered list of [division_key => teams]
+                            $ordered = [];
+                            foreach ($division_order as $dk) {
+                                if (isset($teams_by_division[$dk])) { $ordered[$dk] = $teams_by_division[$dk]; }
+                            }
+                            // Append any remaining unexpected keys
+                            foreach ($teams_by_division as $k => $v) {
+                                if (!isset($ordered[$k])) { $ordered[$k] = $v; }
+                            }
+                        ?>
+                        <?php foreach ($ordered as $division => $division_teams): ?>
+                            <details class="division" open>
+                                <summary>Division: <?php echo htmlspecialchars($pretty($division)); ?> (<?php echo count($division_teams); ?>)</summary>
+                                <table class="teams-table" data-division="<?php echo htmlspecialchars($division); ?>">
+                                <thead>
                                     <tr>
-                                        <td>
-                                            <div style="display: flex; align-items: center;">
-                                                <?php if (!empty($team['logo_path'])): ?>
-                                                    <img src="<?php echo htmlspecialchars($team['logo_path']); ?>" alt="Team Logo" class="team-logo" style="margin-right: 10px;">
-                                                <?php else: ?>
-                                                    <div style="width: 50px; height: 50px; border-radius: 50%; background: #eaeaea; display: flex; align-items: center; justify-content: center; margin-right: 10px;">
-                                                        <i class="fas fa-basketball-ball" style="color: #9e9e9e;"></i>
-                                                    </div>
-                                                <?php endif; ?>
-                                                <?php echo htmlspecialchars($team['team_name']); ?>
-                                            </div>
-                                        </td>
-                                        <td><?php echo htmlspecialchars($team['division']); ?></td>
-                                        <td><?php echo htmlspecialchars($team['coach_name']); ?></td>
-                                        <td><?php echo htmlspecialchars($team['contact_number']); ?></td>
-                                        <td>
-                                            <?php 
-                                            // FIX: Check if players_registered key exists before accessing it
-                                            $players_registered = isset($team['players_registered']) ? $team['players_registered'] : 0;
-                                            if ($players_registered): ?>
-                                                <span class="badge badge-success">Complete</span>
-                                            <?php else: ?>
-                                                <span class="badge badge-warning">Pending</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td><?php echo date('M j, Y', strtotime($team['registration_date'])); ?></td>
-                                        <td>
-                                            <a href="admin.php?view_players=<?php echo $team['id']; ?>" class="btn btn-secondary" style="padding: 8px 12px; font-size: 14px;">
-                                                <i class="fas fa-users"></i> View Players
-                                            </a>
-                                        </td>
+                                        <th>Team</th>
+                                        <th>Coach</th>
+                                        <th>Contact</th>
+                                        <th>Review</th>
+                                        <th>Registered</th>
+                                        <th>Actions</th>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($division_teams as $team): ?>
+                                        <tr class="team-row">
+                                            <td>
+                                                <div style="display: flex; align-items: center;">
+                                                    <?php if (!empty($team['logo_path'])): ?>
+                                                        <img src="<?php echo htmlspecialchars($team['logo_path']); ?>" alt="Team Logo" class="team-logo" style="margin-right: 10px;">
+                                                    <?php else: ?>
+                                                        <div style="width: 50px; height: 50px; border-radius: 50%; background: #eaeaea; display: flex; align-items: center; justify-content: center; margin-right: 10px;">
+                                                            <i class="fas fa-basketball-ball" style="color: #9e9e9e;"></i>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <?php echo htmlspecialchars($team['team_name']); ?>
+                                                </div>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($team['coach_name']); ?></td>
+                                            <td><?php echo htmlspecialchars($team['contact_number']); ?></td>
+                                            <td>
+                                                <?php 
+                                                    $review = isset($team['status']) ? $team['status'] : 'pending';
+                                                    $notes = isset($team['status_notes']) ? $team['status_notes'] : '';
+                                                    $badgeClass = 'badge-warning';
+                                                    $label = 'Pending Review';
+                                                    if ($review === 'approved') { $badgeClass = 'badge-success'; $label = 'Approved'; }
+                                                    if ($review === 'lacking') { $badgeClass = 'badge-warning'; $label = 'Lacking Requirements'; }
+                                                    if ($review === 'rejected') { $badgeClass = 'badge-warning'; $label = 'Not Approved'; }
+                                                ?>
+                                                <div style="margin-bottom:8px;">
+                                                    <span class="badge <?php echo $badgeClass; ?>"><?php echo htmlspecialchars($label); ?></span>
+                                                </div>
+                                                <?php if (!empty($notes)): ?>
+                                                    <div style="font-size:12px;color:#555;margin-bottom:8px;">Notes: <?php echo nl2br(htmlspecialchars($notes)); ?></div>
+                                                <?php endif; ?>
+                                                <form method="POST" action="" style="display:flex; flex-direction:column; gap:6px; max-width:300px;">
+                                                    <input type="hidden" name="team_id" value="<?php echo (int)$team['id']; ?>">
+                                                    <select name="status" style="padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                                        <option value="pending" <?php echo $review==='pending'?'selected':''; ?>>Pending</option>
+                                                        <option value="approved" <?php echo $review==='approved'?'selected':''; ?>>Approved</option>
+                                                        <option value="lacking" <?php echo $review==='lacking'?'selected':''; ?>>Lacking</option>
+                                                        <option value="rejected" <?php echo $review==='rejected'?'selected':''; ?>>Not Approved</option>
+                                                    </select>
+                                                    <input type="text" name="status_notes" value="<?php echo htmlspecialchars($notes); ?>" placeholder="Optional notes" style="padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                                    <button type="submit" name="update_status" class="btn" style="padding:8px 12px; font-size:14px; align-self:flex-start;">
+                                                        <i class="fas fa-save"></i> Save
+                                                    </button>
+                                                </form>
+                                            </td>
+                                            <td><?php echo date('M j, Y', strtotime($team['registration_date'])); ?></td>
+                                            <td>
+                                                <a href="admin.php?view_players=<?php echo $team['id']; ?>" class="btn btn-secondary" style="padding: 8px 12px; font-size: 14px;">
+                                                    <i class="fas fa-users"></i> View Players
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                                </table>
+                            </details>
+                        <?php endforeach; ?>
                     <?php else: ?>
                         <p style="text-align: center; padding: 30px; color: #6c757d;">
                             <i class="fas fa-trophy" style="font-size: 48px; display: block; margin-bottom: 15px; color: #ced4da;"></i>
@@ -593,5 +766,18 @@ if ($is_logged_in && isset($_GET['view_players'])) {
             </div>
         <?php endif; ?>
     </div>
+    <script>
+        // Simple search filter across all team rows
+        const searchInput = document.getElementById('teamSearch');
+        if (searchInput) {
+            searchInput.addEventListener('input', function() {
+                const q = this.value.toLowerCase();
+                document.querySelectorAll('table.teams-table tbody .team-row').forEach(function(row) {
+                    const text = row.innerText.toLowerCase();
+                    row.style.display = text.includes(q) ? '' : 'none';
+                });
+            });
+        }
+    </script>
 </body>
 </html>

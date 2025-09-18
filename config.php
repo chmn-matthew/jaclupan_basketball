@@ -1,6 +1,8 @@
 <?php
 // config.php
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) {
+	session_start();
+}
 
 // Database configuration
 $host = 'localhost';
@@ -89,6 +91,23 @@ try {
         $stmt->execute([$dbname]);
         if ((int)$stmt->fetchColumn() === 0) {
             $pdo->exec("ALTER TABLE teams ADD COLUMN password VARCHAR(255)");
+        }
+    } catch (Exception $ignored) {}
+
+    // Ensure admin review status columns exist on teams table
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'teams' AND COLUMN_NAME = 'status'");
+        $stmt->execute([$dbname]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            $pdo->exec("ALTER TABLE teams ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending' AFTER players_registered");
+        }
+    } catch (Exception $ignored) {}
+
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'teams' AND COLUMN_NAME = 'status_notes'");
+        $stmt->execute([$dbname]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            $pdo->exec("ALTER TABLE teams ADD COLUMN status_notes TEXT NULL AFTER status");
         }
     } catch (Exception $ignored) {}
     

@@ -49,6 +49,23 @@ if (isset($_SESSION['error'])) {
 
 // Check if players are registered
 $players_registered = isset($team['players_registered']) ? (bool)$team['players_registered'] : false;
+$review_status = isset($team['status']) ? $team['status'] : 'pending';
+$review_notes = isset($team['status_notes']) ? $team['status_notes'] : '';
+
+// Load site-wide announcement once for use in header and content
+$announcement_active = false;
+$announcement_message = '';
+$announcement_attachment = '';
+$announcement_file = __DIR__ . DIRECTORY_SEPARATOR . 'announcement.json';
+if (file_exists($announcement_file)) {
+    $raw = file_get_contents($announcement_file);
+    $data = json_decode($raw, true);
+    if (is_array($data) && !empty($data['active']) && !empty($data['message'])) {
+        $announcement_active = true;
+        $announcement_message = (string)$data['message'];
+        if (!empty($data['file_path'])) { $announcement_attachment = (string)$data['file_path']; }
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -309,27 +326,31 @@ $players_registered = isset($team['players_registered']) ? (bool)$team['players_
 </head>
 <body>
     <header>
-        <div class="container">
+        <div class="container" style="position:relative;">
             <h1>JACLUPAN BASKETBALL LEAGUE</h1>
-            <p>TEAM DASHBOARD</p>
+            <p style="display:flex; align-items:center; justify-content:center; gap:10px;">
+                TEAM DASHBOARD
+                <?php if ($announcement_active): ?>
+                    <a href="#announcement" title="View announcement" style="color:#ffeb3b; text-decoration:none; display:inline-flex; align-items:center;">
+                        <i class="fas fa-bullhorn" style="margin-left:6px;"></i>
+                    </a>
+                <?php endif; ?>
+            </p>
         </div>
     </header>
     
     <div class="container">
-        <?php
-        // Load site-wide announcement
-        $announcement_file = __DIR__ . DIRECTORY_SEPARATOR . 'announcement.json';
-        if (file_exists($announcement_file)) {
-            $raw = file_get_contents($announcement_file);
-            $data = json_decode($raw, true);
-            if (is_array($data) && !empty($data['active']) && !empty($data['message'])) {
-                echo '<div class="success" style="background:#e2e3ff;color:#1b1e6b;border-left:4px solid #1a237e;">'
-                    . '<i class="fas fa-bullhorn" style="margin-right:10px;"></i>'
-                    . htmlspecialchars($data['message'])
-                    . '</div>';
-            }
-        }
-        ?>
+        <?php if ($announcement_active): ?>
+            <div id="announcement" class="success" style="background:#e2e3ff;color:#1b1e6b;border-left:4px solid #1a237e;">
+                <i class="fas fa-bullhorn" style="margin-right:10px;"></i>
+                <?php echo htmlspecialchars($announcement_message); ?>
+                <?php if (!empty($announcement_attachment)): ?>
+                    <a href="<?php echo htmlspecialchars($announcement_attachment); ?>" target="_blank" class="btn btn-secondary" style="margin-left:12px; padding:6px 10px; font-size:14px;">
+                        <i class="fas fa-paperclip"></i> View Attachment
+                    </a>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
         <?php if ($message): ?>
             <div class="success">
                 <i class="fas fa-check-circle"></i>
@@ -367,24 +388,36 @@ $players_registered = isset($team['players_registered']) ? (bool)$team['players_
                     </div>
                 </div>
                 
-                <div class="status-badge <?php echo $players_registered ? 'status-complete' : 'status-pending'; ?>">
-                    <i class="fas <?php echo $players_registered ? 'fa-check-circle' : 'fa-clock'; ?>"></i>
-                    <?php echo $players_registered ? 'Registration Complete' : 'Registration Pending'; ?>
+                <div class="status-badge" style="background:#eef2ff;color:#1a237e;">
+                    <i class="fas fa-info-circle"></i>
+                    <?php
+                        $label = 'Pending Admin Review';
+                        if ($review_status === 'approved') { $label = 'Approved by Admin'; }
+                        if ($review_status === 'lacking') { $label = 'Lacking Requirements'; }
+                        if ($review_status === 'rejected') { $label = 'Not Approved'; }
+                        echo htmlspecialchars($label);
+                    ?>
                 </div>
+                <?php if (!empty($review_notes)): ?>
+                    <div style="margin-top:8px; color:#555;">
+                        <strong>Admin Notes:</strong> <?php echo nl2br(htmlspecialchars($review_notes)); ?>
+                    </div>
+                <?php endif; ?>
             </div>
             
             <div class="actions">
-                <?php if (!$players_registered): ?>
+                <?php $locked = ($review_status === 'approved'); ?>
+                <?php if (!$locked): ?>
                     <a href="players.php" class="btn">
-                        <i class="fas fa-plus"></i> Add Players
+                        <i class="fas fa-plus"></i> Manage Players
                     </a>
                 <?php else: ?>
-                    <a href="players.php" class="btn btn-secondary">
-                        <i class="fas fa-edit"></i> Edit Players
+                    <a href="#" class="btn btn-secondary" style="pointer-events:none;opacity:0.6;">
+                        <i class="fas fa-lock"></i> Players Locked (Approved)
                     </a>
                 <?php endif; ?>
                 
-                <a href="edit_team.php" class="btn btn-secondary">
+                <a href="edit_team.php" class="btn btn-secondary" <?php echo $locked ? 'style="pointer-events:none;opacity:0.6;"' : ''; ?>>
                     <i class="fas fa-cog"></i> Edit Team Info
                 </a>
                 
